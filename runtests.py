@@ -20,6 +20,9 @@ DEFAULT_SETTINGS = dict(
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": ":memory:",
+            "TEST": {
+                "NAME": "tests.db",
+            }
         }
     },
     SITE_ID=1,

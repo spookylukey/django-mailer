@@ -11,7 +11,7 @@ import lockfile
 from django.core import mail
 from django.core.mail.backends.locmem import EmailBackend as LocMemEmailBackend
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, TransactionTestCase
 from django.utils import six
 from django.utils.timezone import now as datetime_now
 from mock import ANY, Mock, patch
@@ -697,3 +697,56 @@ class TestCommandHelper(TestCase):
         with patch('mailer.management.commands.retry_deferred.logging') as logging:
             call_command_with_cron_arg('retry_deferred', 1)
             logging.basicConfig.assert_called_with(level=logging.ERROR, format=ANY)
+
+
+class TestIssue86(TransactionTestCase):
+    def test(self):
+        import threading
+        from django.contrib.auth.models import User
+
+        class EmailThread(threading.Thread):
+            def __init__(self, subject, context, recipient, template):
+                self.subject = subject
+                self.recipient = recipient
+                self.message = ""
+                threading.Thread.__init__(self)
+
+            def run(self):
+                msg = mail.EmailMessage(
+                    subject=self.subject,
+                    from_email="noreply@foo.com",
+                    to=self.recipient,
+                    body=self.message
+                )
+                msg.content_subtype = "html"
+                msg.send(fail_silently=False)
+
+        def notify_admin_blocked_account(user):
+            """
+            Sends sends an email when the account is blocked
+            :return:
+            """
+
+            email = EmailThread(
+                subject='{}, your account has been blocked'.format(user),
+                context={
+                    'user': user,
+                    'login_attempts': 5,
+                },
+                recipient=[user.email],
+                template='mail/notify_admin_blocked_account.html'
+            )
+            email.start()
+            return email
+
+        user = User(username="foo", email="foo@foo.com")
+        user.save()
+        with self.settings(EMAIL_BACKEND="mailer.backend.DbBackend"):
+            email_thread = notify_admin_blocked_account(user)
+            email_thread.join()
+
+        with self.settings(MAILER_EMAIL_BACKEND="mailer.tests.TestMailerEmailBackend"):
+            call_command('send_mail')
+        self.assertEqual(len(TestMailerEmailBackend.outbox), 1)
+        self.assertEqual(TestMailerEmailBackend.outbox[0].to,
+                         ["foo@foo.com"])
